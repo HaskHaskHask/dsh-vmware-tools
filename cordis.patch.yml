@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-vmware-tools
+      name: 'dsh-vmware-tools'
+      config: {}

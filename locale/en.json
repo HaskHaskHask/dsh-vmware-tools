@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "VMware control",
+    "description": "Model tools that list, create, delete, configure, power-control, and operate inside local VMware virtual machines through vmrun.",
+    "detail": "docs/DETAIL.md"
+  }
+}

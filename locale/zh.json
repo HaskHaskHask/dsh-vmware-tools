@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "VMware 控制",
+    "description": "提供模型工具，通过 vmrun 列出、创建、删除、配置、控制电源状态，并操作虚拟机内的系统。",
+    "detail": "docs/DETAIL.md"
+  }
+}
