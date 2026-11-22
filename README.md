@@ -12,7 +12,7 @@ move files, and take screenshots inside the guest.
 ```
 ┌──────────────────────────┐        vmrun        ┌──────────────────────────┐
 │  DeepSeek Harness model  │ ──────────────────► │  VMware Workstation /    │
-│  (11 dsh-vmware tools)   │ ◄────────────────── │  Player VMs on this host │
+│  (12 dsh-vmware tools)   │ ◄────────────────── │  Player VMs on this host │
 └──────────────────────────┘                     └──────────────────────────┘
 ```
 
@@ -25,6 +25,7 @@ move files, and take screenshots inside the guest.
 | **Add / remove VMs** | Clone an existing VM (full or linked), create a blank VM with a fresh virtual disk, or delete a VM with its files. |
 | **Read / write state** | Query power state and start, stop, reset, suspend, pause, and resume a VM. |
 | **Operate the guest** | Run commands and scripts, list and kill processes, manage and copy files, capture the screen, and read the guest IP address. |
+| **Remember credentials** | Store each VM's guest user name and password once — automatically on the first call that passes them, or from the settings page — and reuse it for every later in-guest call. |
 
 ## Tools
 
@@ -48,6 +49,58 @@ move files, and take screenshots inside the guest.
 | `vm_guest_file` | `vmx`, `action`, `path?`, `hostPath?`, `newPath?`, … | `list` \| `exists` \| `isDir` \| `mkdir` \| `rmdir` \| `delete` \| `copyToHost` \| `copyFromHost` \| `rename`. |
 | `vm_guest_screenshot` | `vmx`, `hostPath`, … | Capture the guest screen to a PNG on the host. |
 | `vm_guest_status` | `vmx`, `wait?`, … | Read the guest IP address and VMware Tools state. |
+
+### Credentials
+
+| Tool | Arguments | Purpose |
+| --- | --- | --- |
+| `vm_credentials` | `action`, `vmx?`, `guestUser?`, `guestPassword?` | `list` the stored per-VM entries, `set` one, or `forget` one. Passwords are never returned — an entry reports the user name and a mask only. |
+
+## Guest credentials
+
+Each virtual machine can have its guest credentials remembered in the DSH
+credential store, as one `grant` record owned by this plugin:
+
+- key — `dsh-vmware-tools/<vm-slug>-<path-hash>`
+- payload — `{ vmx, name, guestUser, guestPassword, updatedAt }`
+
+Every `vm_guest_*` call resolves credentials in this order:
+
+1. the `guestUser` / `guestPassword` arguments of that call,
+2. the record stored for that VM,
+3. the `guestUser` / `guestPassword` plugin configuration.
+
+A call that passes an explicit user name **and** password also stores them for
+that VM, so a single successful call is enough — later calls can omit both
+arguments. Passwords are write-only: nothing in the plugin, the tool output, the
+command, or the settings page reads one back.
+
+Manage the store in three ways:
+
+```jsonc
+// list
+{ "action": "list" }
+
+// save (also happens automatically on any guest call with both values)
+{ "action": "set", "vmx": "C:\\...\\Windows 10 x64.vmx", "guestUser": "Administrator", "guestPassword": "…" }
+
+// forget
+{ "action": "forget", "vmx": "C:\\...\\Windows 10 x64.vmx" }
+```
+
+### Command
+
+`/vm-credentials` lists the stored entries; `/vm-credentials forget <vmx path>`
+removes one. The command deliberately accepts no password — saving one belongs
+to the tool or the settings page.
+
+### Settings page
+
+**Settings → VMware guest credentials** lists the stored entries and lets you
+pick a virtual machine from the VMware inventory, type a user name and password,
+replace an entry, or forget it. The page is a Client half of this bundle
+(`client.js`) that talks to the Host half over the exact route
+`api/vmware.credentials` with `{ op: "list" | "set" | "forget" }`.
 
 ## Requirements
 
@@ -97,8 +150,8 @@ Configuration lives in the `config` block of `cordis.patch.yml`:
 | `vmrunType` | `ws` | `vmrun -T` type: `ws` (Workstation), `player`, or `fusion`. |
 | `vmDir` | `~/Documents/Virtual Machines` | Default parent directory for newly created VMs. |
 | `timeoutMs` | `120000` | Per-command timeout in milliseconds. |
-| `guestUser` | — | Default guest OS username for `vm_guest_*` tools. |
-| `guestPassword` | — | Default guest OS password for `vm_guest_*` tools. |
+| `guestUser` | — | Fallback guest OS username, used only when the VM has no stored record. |
+| `guestPassword` | — | Fallback guest OS password, used only when the VM has no stored record. |
 
 ## Usage examples
 
@@ -159,6 +212,7 @@ guests, `/bin/sh` otherwise — and can be overridden with `interpreter`.
 | Guest command output is empty | Expected for raw `runProgramInGuest`; `vm_guest_exec` works around it by copying an output file back. |
 | `Unable to get the IP address` right after resume | The guest network is not up yet; retry with `vm_guest_status` passing `wait: true`. |
 | Suspending a paused VM fails with `The virtual machine is paused` | Unpause it first (`vm_power` with `action: "unpause"`), then suspend. |
+| A guest call fails with a credentials error although one was stored | The stored record is keyed by the `.vmx` path — check it matches the path you pass. `/vm-credentials` lists the stored paths. |
 
 ## Safety notes
 
@@ -166,16 +220,20 @@ guests, `/bin/sh` otherwise — and can be overridden with `interpreter`.
   **and its files** and cannot be undone — verify the `.vmx` path first.
 - `vm_guest_exec` runs arbitrary commands inside the guest, typically as an
   administrator. Prefer disposable or snapshot-protected VMs.
-- Store guest credentials in the plugin config or pass them per call; they are
-  handed to `vmrun` as `-gu` / `-gp`.
+- Store guest credentials per VM — the first call that passes a user name and
+  password stores them, and the settings page can do it explicitly. They are
+  written to the DSH credential store, never returned, and handed to `vmrun` as
+  `-gu` / `-gp`.
 
 ## Repository layout
 
 ```
 .
-├── index.js            # plugin entry: registers the 11 model tools
+├── index.js            # Host half: registers the 12 model tools, the command,
+│                       #   the credential records, and the settings route
+├── client.js           # Client half: the Settings → VMware guest credentials page
 ├── cordis.patch.yml    # DSH bundle patch that enables the plugin
-├── package.json        # bundle manifest (dsh.bundle.patch)
+├── package.json        # bundle manifest (dsh.bundle.patch, dsh.client)
 ├── icon.svg            # plugin icon
 ├── locale/             # en.json, zh.json metadata
 └── docs/DETAIL.md      # tool and configuration reference
