@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "VMware control",
-    "description": "Model tools that list, create, delete, configure, power-control, and operate inside local VMware virtual machines through vmrun.",
+    "description": "Model tools that list, create, delete, configure, power-control, and operate inside local VMware virtual machines through vmrun, with per-VM guest credentials kept in the DSH credential store.",
     "detail": "docs/DETAIL.md"
   }
 }
