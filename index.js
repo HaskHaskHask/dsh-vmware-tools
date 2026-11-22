@@ -214,6 +214,8 @@ function vmrunFailure(result) {
 
 export function apply(ctx, config) {
   const timeoutMs = config.timeoutMs ?? 120000
+  const credentials = credentialsOf(ctx)
+  const guestFor = (args) => resolveGuest(credentials, config, args)
 
   // 1. List virtual machines (registered + running).
   ctx.tools.register({
@@ -546,8 +548,8 @@ export function apply(ctx, config) {
         vmx: { type: 'string', description: 'Absolute path to the .vmx file.' },
         command: { type: 'string', description: 'The script text to execute inside the guest.' },
         interpreter: { type: 'string', description: 'Guest path to the interpreter, e.g. /bin/bash or powershell.exe; auto-detected when omitted.' },
-        guestUser: { type: 'string', description: 'Guest OS username; defaults to the plugin guestUser config.' },
-        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the plugin guestPassword config.' },
+        guestUser: { type: 'string', description: 'Guest OS username; defaults to the credentials stored for this VM.' },
+        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the credential stored for this VM.' },
         noWait: { type: 'boolean', description: 'Return immediately without waiting for the program to finish.' },
         interactive: { type: 'boolean', description: 'Run interactively in the guest.' },
       },
@@ -569,36 +571,36 @@ export function apply(ctx, config) {
         const guestBat = `C:\\Windows\\Temp\\_dsh_vm_exec_${tag}.bat`
         const guestOut = `C:\\Windows\\Temp\\_dsh_vm_exec_${tag}.out`
         const hostBat = join(tmpdir(), `dsh-vm-exec-${tag}.bat`)
-        const bat = ['@echo off', 'chcp 65001 >nul', 'set PATH=C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\Wbem;%PATH%', `${args.command} > ${guestOut} 2>&1`, ''].join('\r\n')
+        const bat = ['@echo off', 'chcp 65001 >nul', 'set PATH=C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\Wbem;%PATH%', `( ${args.command} ) > ${guestOut} 2>&1`, ''].join('\r\n')
         writeFileSync(hostBat, bat, 'utf8')
-        const copyIn = await vmrun(config, ['CopyFileFromHostToGuest', args.vmx, hostBat, guestBat], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        const copyIn = await vmrun(config, ['CopyFileFromHostToGuest', args.vmx, hostBat, guestBat], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
         try { unlinkSync(hostBat) } catch {}
         if (!copyIn.ok) return { ok: false, error: 'Failed to stage guest script: ' + vmrunFailure(copyIn) }
-        run = await vmrun(config, ['runProgramInGuest', args.vmx, ...flags, shell, '/c ' + guestBat], { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, guestOf(args))
-        const copyOut = await vmrun(config, ['CopyFileFromGuestToHost', args.vmx, guestOut, hostOut], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        run = await vmrun(config, ['runProgramInGuest', args.vmx, ...flags, shell, '/c ' + guestBat], { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, await guestFor(args))
+        const copyOut = await vmrun(config, ['CopyFileFromGuestToHost', args.vmx, guestOut, hostOut], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
         if (copyOut.ok && existsSync(hostOut)) {
           try { output = readFileSync(hostOut, 'utf8') } catch { output = '' }
           try { unlinkSync(hostOut) } catch {}
         }
-        await vmrun(config, ['deleteFileInGuest', args.vmx, guestBat], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
-        await vmrun(config, ['deleteFileInGuest', args.vmx, guestOut], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        await vmrun(config, ['deleteFileInGuest', args.vmx, guestBat], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
+        await vmrun(config, ['deleteFileInGuest', args.vmx, guestOut], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
       } else {
         const guestSh = `/tmp/_dsh_vm_exec_${tag}.sh`
         const guestOut = `/tmp/_dsh_vm_exec_${tag}.out`
         const hostSh = join(tmpdir(), `dsh-vm-exec-${tag}.sh`)
-        const sh = `#!/bin/sh\n${args.command} > ${guestOut} 2>&1\n`
+        const sh = `#!/bin/sh\n{ ${args.command}; } > ${guestOut} 2>&1\n`
         writeFileSync(hostSh, sh, 'utf8')
-        const copyIn = await vmrun(config, ['CopyFileFromHostToGuest', args.vmx, hostSh, guestSh], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        const copyIn = await vmrun(config, ['CopyFileFromHostToGuest', args.vmx, hostSh, guestSh], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
         try { unlinkSync(hostSh) } catch {}
         if (!copyIn.ok) return { ok: false, error: 'Failed to stage guest script: ' + vmrunFailure(copyIn) }
-        run = await vmrun(config, ['runProgramInGuest', args.vmx, ...flags, shell, guestSh], { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, guestOf(args))
-        const copyOut = await vmrun(config, ['CopyFileFromGuestToHost', args.vmx, guestOut, hostOut], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        run = await vmrun(config, ['runProgramInGuest', args.vmx, ...flags, shell, guestSh], { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, await guestFor(args))
+        const copyOut = await vmrun(config, ['CopyFileFromGuestToHost', args.vmx, guestOut, hostOut], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
         if (copyOut.ok && existsSync(hostOut)) {
           try { output = readFileSync(hostOut, 'utf8') } catch { output = '' }
           try { unlinkSync(hostOut) } catch {}
         }
-        await vmrun(config, ['deleteFileInGuest', args.vmx, guestSh], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
-        await vmrun(config, ['deleteFileInGuest', args.vmx, guestOut], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        await vmrun(config, ['deleteFileInGuest', args.vmx, guestSh], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
+        await vmrun(config, ['deleteFileInGuest', args.vmx, guestOut], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
       }
       if (!run.ok) return { ok: false, error: vmrunFailure(run), output }
       return { ok: true, vmx: args.vmx, interpreter: shell, output: output || '(no output)' }
@@ -616,8 +618,8 @@ export function apply(ctx, config) {
         vmx: { type: 'string', description: 'Absolute path to the .vmx file.' },
         action: { type: 'string', enum: ['list', 'kill'], description: 'list processes, or kill one process.' },
         pid: { type: 'string', description: 'Process id to kill; required for action kill.' },
-        guestUser: { type: 'string', description: 'Guest OS username; defaults to the plugin guestUser config.' },
-        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the plugin guestPassword config.' },
+        guestUser: { type: 'string', description: 'Guest OS username; defaults to the credentials stored for this VM.' },
+        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the credential stored for this VM.' },
       },
       required: ['vmx', 'action'],
       additionalProperties: false,
@@ -626,11 +628,11 @@ export function apply(ctx, config) {
     async execute(args, exec) {
       if (args.action === 'kill') {
         if (!args.pid) return { ok: false, error: 'pid is required for action kill' }
-        const result = await vmrun(config, ['killProcessInGuest', args.vmx, String(args.pid)], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+        const result = await vmrun(config, ['killProcessInGuest', args.vmx, String(args.pid)], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
         if (!result.ok) return { ok: false, error: vmrunFailure(result) }
         return { ok: true, action: 'kill', pid: args.pid, output: result.output || '(no output)' }
       }
-      const result = await vmrun(config, ['listProcessesInGuest', args.vmx], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+      const result = await vmrun(config, ['listProcessesInGuest', args.vmx], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
       if (!result.ok) return { ok: false, error: vmrunFailure(result) }
       return { ok: true, action: 'list', output: result.output || '(no processes)' }
     },
@@ -649,8 +651,8 @@ export function apply(ctx, config) {
         path: { type: 'string', description: 'Guest path used by list/exists/isDir/mkdir/rmdir/delete.' },
         hostPath: { type: 'string', description: 'Host path used by copyToHost and copyFromHost.' },
         newPath: { type: 'string', description: 'Destination guest path used by rename.' },
-        guestUser: { type: 'string', description: 'Guest OS username; defaults to the plugin guestUser config.' },
-        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the plugin guestPassword config.' },
+        guestUser: { type: 'string', description: 'Guest OS username; defaults to the credentials stored for this VM.' },
+        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the credential stored for this VM.' },
       },
       required: ['vmx', 'action'],
       additionalProperties: false,
@@ -672,7 +674,7 @@ export function apply(ctx, config) {
         case 'rename': need('path'); need('newPath'); cmdArgs = ['renameFileInGuest', args.vmx, args.path, args.newPath]; break
         default: return { ok: false, error: `unknown action: ${a}` }
       }
-      const result = await vmrun(config, cmdArgs, { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, guestOf(args))
+      const result = await vmrun(config, cmdArgs, { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, await guestFor(args))
       if (!result.ok) return { ok: false, error: vmrunFailure(result) }
       return { ok: true, action: a, output: result.output || '(done)' }
     },
@@ -688,15 +690,15 @@ export function apply(ctx, config) {
       properties: {
         vmx: { type: 'string', description: 'Absolute path to the .vmx file.' },
         hostPath: { type: 'string', description: 'Host path (including .png filename) to save the screenshot to.' },
-        guestUser: { type: 'string', description: 'Guest OS username; defaults to the plugin guestUser config.' },
-        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the plugin guestPassword config.' },
+        guestUser: { type: 'string', description: 'Guest OS username; defaults to the credentials stored for this VM.' },
+        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the credential stored for this VM.' },
       },
       required: ['vmx', 'hostPath'],
       additionalProperties: false,
     },
     output: textOutput,
     async execute(args, exec) {
-      const result = await vmrun(config, ['captureScreen', args.vmx, args.hostPath], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+      const result = await vmrun(config, ['captureScreen', args.vmx, args.hostPath], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
       if (!result.ok) return { ok: false, error: vmrunFailure(result) }
       return { ok: true, vmx: args.vmx, hostPath: args.hostPath }
     },
@@ -712,8 +714,8 @@ export function apply(ctx, config) {
       properties: {
         vmx: { type: 'string', description: 'Absolute path to the .vmx file.' },
         wait: { type: 'boolean', description: 'Wait for the IP address if it is not yet available.' },
-        guestUser: { type: 'string', description: 'Guest OS username; defaults to the plugin guestUser config.' },
-        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the plugin guestPassword config.' },
+        guestUser: { type: 'string', description: 'Guest OS username; defaults to the credentials stored for this VM.' },
+        guestPassword: { type: 'string', description: 'Guest OS password; defaults to the credential stored for this VM.' },
       },
       required: ['vmx'],
       additionalProperties: false,
@@ -721,8 +723,8 @@ export function apply(ctx, config) {
     output: textOutput,
     async execute(args, exec) {
       const ipArgs = ['getGuestIPAddress', args.vmx, ...(args.wait ? ['-wait'] : [])]
-      const ipResult = await vmrun(config, ipArgs, { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, guestOf(args))
-      const toolsResult = await vmrun(config, ['checkToolsState', args.vmx], { timeout: timeoutMs, signal: exec.signal }, guestOf(args))
+      const ipResult = await vmrun(config, ipArgs, { timeout: Math.max(timeoutMs, 300000), signal: exec.signal }, await guestFor(args))
+      const toolsResult = await vmrun(config, ['checkToolsState', args.vmx], { timeout: timeoutMs, signal: exec.signal }, await guestFor(args))
       return {
         ok: true,
         vmx: args.vmx,
@@ -732,15 +734,289 @@ export function apply(ctx, config) {
       }
     },
   })
+
+  // 12. Manage the stored guest credentials of each virtual machine.
+  ctx.tools.register({
+    name: 'vm_credentials',
+    description:
+      'List, save, or forget the guest OS credentials stored for local virtual machines. ' +
+      'Credentials are kept in the DSH credential store, one record per virtual machine, and are used ' +
+      'automatically by the vm_guest_* tools when no guestUser/guestPassword is passed to them. ' +
+      'Passwords are never read back: a stored entry reports only the user name and a fixed mask.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'set', 'forget'], description: 'list stored entries, save one entry, or forget one entry.' },
+        vmx: { type: 'string', description: 'Absolute path to the .vmx file; required for actions set and forget.' },
+        guestUser: { type: 'string', description: 'Guest OS username; required for action set.' },
+        guestPassword: { type: 'string', description: 'Guest OS password; required for action set. Never returned afterwards.' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: textOutput,
+    async execute(args) {
+      if (!credentials) {
+        return { ok: false, error: 'The DSH credential store is not available in this deployment.', configured: false, entries: [] }
+      }
+      if (args.action === 'set') {
+        if (!args.vmx) return { ok: false, error: 'vmx is required for action set' }
+        if (!args.guestUser || !args.guestPassword) return { ok: false, error: 'guestUser and guestPassword are required for action set' }
+        const written = await rememberGuest(credentials, args.vmx, args.guestUser, args.guestPassword)
+        return { ok: true, action: 'set', vmx: args.vmx, guestUser: args.guestUser, stored: true, changed: written }
+      }
+      if (args.action === 'forget') {
+        if (!args.vmx) return { ok: false, error: 'vmx is required for action forget' }
+        const forgotten = await forgetGuest(credentials, args.vmx)
+        return { ok: forgotten, action: 'forget', vmx: args.vmx, forgotten }
+      }
+      const entries = await listGuests(credentials)
+      return { ok: true, action: 'list', count: entries.length, entries }
+    },
+  })
+
+  // Human command for the same store: /vm-credentials [list|forget <vmx>]
+  const commands = ctx.get('commands')
+  if (commands && typeof commands.register === 'function') {
+    ctx.effect(() =>
+      commands.register({
+        name: 'vm-credentials',
+        description: 'List or forget the stored guest credentials of local virtual machines.',
+        input: { hint: 'list | forget <vmx path>' },
+        handler: async (invocation) => {
+          const [verb, ...rest] = String(invocation.rawInput ?? '').trim().split(/\s+/).filter(Boolean)
+          const action = (verb ?? 'list').toLowerCase()
+          if (action === 'forget') {
+            const vmx = rest.join(' ').replace(/^"|"$/g, '')
+            if (!vmx) return { kind: 'error', text: 'Usage: /vm-credentials forget <vmx path>' }
+            const forgotten = await forgetGuest(credentials, vmx)
+            return forgotten
+              ? { kind: 'success', text: `Forgot stored guest credentials for ${vmx}` }
+              : { kind: 'error', text: `No stored guest credentials could be removed for ${vmx}` }
+          }
+          if (action !== 'list') return { kind: 'error', text: 'Usage: /vm-credentials list | forget <vmx path>' }
+          const entries = await listGuests(credentials)
+          if (entries.length === 0) return { kind: 'success', text: 'No stored guest credentials.' }
+          const lines = entries.map((entry) => `- ${entry.name ?? entry.vmx}  user=${entry.guestUser ?? '?'}  password=${PASSWORD_MASK}  updated=${entry.updatedAt ?? '?'}  key=${entry.key}`)
+          return { kind: 'success', text: [`Stored guest credentials (${entries.length}):`, ...lines].join('\n') }
+        },
+      }),
+      'vmware-tools: vm-credentials command',
+    )
+  }
+
+  // Settings page backend: one exact route, owned by the browser peer.
+  const connection = ctx.get('connection')
+  if (connection && connection.fetch && typeof connection.fetch.register === 'function') {
+    ctx.effect(
+      () =>
+        connection.fetch.register({
+          path: CREDENTIALS_ROUTE,
+          methods: ['POST'],
+          requestBody: 'buffered',
+          fetch: async (request) => {
+            let body = null
+            try {
+              body = await request.json()
+            } catch {
+              return jsonResponse(400, { ok: false, error: 'Request body must be JSON.' })
+            }
+            const op = body && typeof body.op === 'string' ? body.op : ''
+            if (op === 'vms') return jsonResponse(200, { ok: true, vms: readInventory() ?? [] })
+            if (!credentials) return jsonResponse(200, { ok: false, error: 'The DSH credential store is not available in this deployment.', entries: [] })
+            if (op === 'list') return jsonResponse(200, { ok: true, entries: await listGuests(credentials) })
+            if (op === 'set') {
+              const vmx = typeof body.vmx === 'string' ? body.vmx : ''
+              const guestUser = typeof body.guestUser === 'string' ? body.guestUser : ''
+              const guestPassword = typeof body.guestPassword === 'string' ? body.guestPassword : ''
+              if (!vmx || !guestUser || !guestPassword) return jsonResponse(400, { ok: false, error: 'vmx, guestUser and guestPassword are required.' })
+              await rememberGuest(credentials, vmx, guestUser, guestPassword)
+              return jsonResponse(200, { ok: true, entries: await listGuests(credentials) })
+            }
+            if (op === 'forget') {
+              const vmx = typeof body.vmx === 'string' ? body.vmx : ''
+              if (!vmx) return jsonResponse(400, { ok: false, error: 'vmx is required.' })
+              await forgetGuest(credentials, vmx)
+              return jsonResponse(200, { ok: true, entries: await listGuests(credentials) })
+            }
+            return jsonResponse(400, { ok: false, error: `Unknown op: ${op || '(empty)'}` })
+          },
+        }),
+      'vmware-tools: guest credential route',
+    )
+  }
+}
+
+/** Build a JSON response for the settings-page credential route. */
+function jsonResponse(status, body) {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } })
 }
 
 function normalizeKey(path) {
   return (path ?? '').replace(/\\/g, '/').toLowerCase()
 }
 
-/** Extract per-call guest credentials, which fall back to plugin config. */
-function guestOf(args) {
-  return { guestUser: args.guestUser, guestPassword: args.guestPassword }
+// ---------------------------------------------------------------------------
+// Guest credential store (DSH credentials service records)
+// ---------------------------------------------------------------------------
+//
+// Each VM's guest credentials live in one `grant` record owned by this plugin:
+//   key     dsh-vmware-tools/<vm-slug>-<path-hash>
+//   payload { vmx, name, guestUser, guestPassword, updatedAt }
+// Passwords are never returned to a model, a command, or the settings page —
+// only `configured`, the user name, and a fixed mask.
+
+/** Scope segment of every record this plugin owns; also its registered name. */
+const CREDENTIAL_SCOPE = 'dsh-vmware-tools'
+
+/** Path of the browser-facing endpoint that backs the settings page. */
+const CREDENTIALS_ROUTE = '/api/vmware.credentials'
+
+/** Masked stand-in for a stored password; the value itself never leaves the host. */
+const PASSWORD_MASK = '********'
+
+/** Resolve the credentials service, or null when this deployment has none. */
+function credentialsOf(ctx) {
+  const service = ctx.get('credentials')
+  if (!service || typeof service.readRecord !== 'function' || typeof service.modifyRecord !== 'function') return null
+  return service
+}
+
+/** Lowercase hyphenated slug that satisfies the credential-key id segment. */
+function slugOf(text) {
+  const slug = (text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24)
+    .replace(/-+$/, '')
+  return /^[a-z]/.test(slug) ? slug : `vm-${slug || 'guest'}`
+}
+
+/** 32-bit FNV-1a hash as eight lowercase hex digits, for a stable path-based suffix. */
+function shortHash(text) {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+/** Build the credential key for one VMX path. */
+function credentialKeyFor(vmx) {
+  const name = basename(vmx ?? '', '.vmx')
+  return `${CREDENTIAL_SCOPE}/${slugOf(name)}-${shortHash(normalizeKey(vmx))}`
+}
+
+/** Read one VM's stored credential payload, or null. */
+async function readGuestRecord(credentials, vmx) {
+  if (!credentials) return null
+  try {
+    const record = await credentials.readRecord(credentialKeyFor(vmx))
+    if (!record || record.kind !== 'grant') return null
+    const payload = record.payload
+    if (!payload || typeof payload !== 'object') return null
+    return payload
+  } catch {
+    return null
+  }
+}
+
+/** Persist one VM's guest credentials; an unchanged payload is left untouched. */
+async function rememberGuest(credentials, vmx, guestUser, guestPassword) {
+  if (!credentials || !vmx || !guestUser || !guestPassword) return false
+  const key = credentialKeyFor(vmx)
+  let written = false
+  try {
+    await credentials.modifyRecord(key, async (current) => {
+      const payload = current && current.kind === 'grant' ? current.payload : null
+      const same = payload && payload.vmx === vmx && payload.guestUser === guestUser && payload.guestPassword === guestPassword
+      if (same) return undefined
+      written = true
+      return {
+        kind: 'grant',
+        payload: {
+          vmx,
+          name: basename(vmx, '.vmx'),
+          guestUser,
+          guestPassword,
+          updatedAt: new Date().toISOString(),
+        },
+      }
+    })
+  } catch {
+    return false
+  }
+  return written
+}
+
+/** Remove one VM's stored credentials. */
+async function forgetGuest(credentials, vmx) {
+  if (!credentials || !vmx) return false
+  try {
+    await credentials.deleteRecord(credentialKeyFor(vmx))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Every stored guest record owned by this plugin, passwords masked out. */
+async function listGuests(credentials) {
+  if (!credentials) return []
+  let entries = []
+  try {
+    entries = await credentials.listRecords()
+  } catch {
+    return []
+  }
+  const owned = entries.filter((entry) => String(entry.key).startsWith(`${CREDENTIAL_SCOPE}/`))
+  const result = []
+  for (const entry of owned) {
+    let payload = null
+    try {
+      const record = await credentials.readRecord(entry.key)
+      payload = record && record.kind === 'grant' ? record.payload : null
+    } catch {
+      payload = null
+    }
+    if (!payload || typeof payload !== 'object') continue
+    result.push({
+      key: String(entry.key),
+      vmx: typeof payload.vmx === 'string' ? payload.vmx : null,
+      name: typeof payload.name === 'string' ? payload.name : null,
+      guestUser: typeof payload.guestUser === 'string' ? payload.guestUser : null,
+      guestPassword: PASSWORD_MASK,
+      updatedAt: typeof payload.updatedAt === 'string' ? payload.updatedAt : null,
+    })
+  }
+  return result
+}
+
+/**
+ * Resolve the guest credentials for one call: explicit arguments first, then the
+ * stored record for that VM, then the plugin configuration. Explicit user+password
+ * pairs are remembered on the way through, so one successful call is enough.
+ */
+async function resolveGuest(credentials, config, args) {
+  const explicitUser = typeof args.guestUser === 'string' && args.guestUser.length > 0 ? args.guestUser : null
+  const explicitPassword = typeof args.guestPassword === 'string' && args.guestPassword.length > 0 ? args.guestPassword : null
+  if (explicitUser && explicitPassword) {
+    await rememberGuest(credentials, args.vmx, explicitUser, explicitPassword)
+    return { guestUser: explicitUser, guestPassword: explicitPassword }
+  }
+  if (explicitUser || explicitPassword) {
+    const stored = await readGuestRecord(credentials, args.vmx)
+    const user = explicitUser ?? (typeof stored?.guestUser === 'string' ? stored.guestUser : config.guestUser)
+    const password = explicitPassword ?? (typeof stored?.guestPassword === 'string' ? stored.guestPassword : config.guestPassword)
+    return { guestUser: user, guestPassword: password }
+  }
+  const stored = await readGuestRecord(credentials, args.vmx)
+  if (stored && typeof stored.guestUser === 'string' && typeof stored.guestPassword === 'string') {
+    return { guestUser: stored.guestUser, guestPassword: stored.guestPassword }
+  }
+  return { guestUser: config.guestUser, guestPassword: config.guestPassword }
 }
 
 /** Detect the guest shell from the VM's guestOS. */
